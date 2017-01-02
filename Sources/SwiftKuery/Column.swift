@@ -17,7 +17,7 @@
 // MARK: Column
 
 /// Definition of table column.
-public class Column: Field {
+public class Column: Field, Creatable {
     /// The name of the column.
     public private (set) var name: String
     
@@ -26,12 +26,18 @@ public class Column: Field {
     
     /// The table to which the column belongs.
     public weak var table: Table!
+    
+    private var columnType: SQLDataType.Type?
+    private var options = [ColumnOptions]()
+    
 
     /// Initialize an instance of Column.
     ///
     /// - Parameter name: The name of the column.
-    public init(_ name: String) {
+    public init(_ name: String, type: SQLDataType.Type? = nil, options: [ColumnOptions] = []) {
         self.name = name
+        self.columnType = type
+        self.options = options
     }
     
     /// Build the column using `QueryBuilder`.
@@ -49,6 +55,14 @@ public class Column: Field {
             result += " AS " + packName(alias)
         }
         return result
+    }
+    
+    public func create() throws -> String {
+        guard let type = columnType else {
+            throw QueryError.databaseError("Column type not set.")
+        }
+        
+        return name + " " + type.sqlName
     }
 
     /// Add an alias to the column, i.e., implement the SQL AS operator.

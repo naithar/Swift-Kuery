@@ -17,7 +17,7 @@
 // MARK: Table
 
 /// Subclasses of the Table class are metadata describing a table in a relational database that you want to work with.
-open class Table: Buildable {
+open class Table: Buildable, Creatable {
     private var _name = ""
     private var numberOfColumns = 0
     
@@ -66,6 +66,13 @@ open class Table: Buildable {
             result += " AS " + packName(alias)
         }
         return result
+    }
+    
+    public func create() throws -> String {
+        let mirror = Mirror(reflecting: self)
+        let columns = try mirror.children.flatMap { $0.value as? Column }.reduce("") { $0 + ", " + (try $1.create()) }
+        
+        return "CREATE TABLE " + _name + "(" + columns + ");"
     }
 
     /// Add alias to the table, i.e., implement the SQL AS operator.
