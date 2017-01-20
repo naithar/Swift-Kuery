@@ -14,10 +14,99 @@
  limitations under the License.
  */
 
+
+public protocol Extension {
+    
+    var priority: Int { get }
+    
+    func buildExtension(builder: QueryBuilder) throws -> String
+}
+
+public struct AnyExtension: Extension {
+   
+    private var base: Any
+    
+    public var priority: Int {
+        return (self.base as! Extension).priority
+    }
+    
+    public init<T: Extension>(base: T) {
+        self.base = base
+    }
+    
+    public func buildExtension(builder: QueryBuilder) throws -> String {
+        return try (self.base as! Extension).buildExtension(builder: builder)
+    }
+    
+    func check<T>(for type: T.Type) -> Bool {
+        return self.base is T
+    }
+}
+
+struct WithExtension: Extension {
+    
+    public let priority = 10
+    
+    private let tables: [AuxiliaryTable]
+    
+    init(tables: [AuxiliaryTable]) {
+        self.tables = tables
+    }
+    
+    public func buildExtension(builder: QueryBuilder) throws -> String {
+        let result = try "WITH " + tables.map { try $0.buildWith(queryBuilder: builder) }.joined(separator: ", ")
+        
+        return result
+    }
+}
+
+public protocol Extendable {
+    
+    associatedtype Position: Hashable
+    
+    var extensions: [Position : [AnyExtension]] { get }
+    
+    func extend(with: AnyExtension, at: Position) -> Self
+}
+
+extension Extendable {
+    
+    func buildExtension(at position: Position, using builder: QueryBuilder) throws -> String {
+        guard let extensions = self.extensions[position] else {
+            return ""
+        }
+        
+        let result = try " " + extensions.sorted { $0.priority > $1.priority }.map { try $0.buildExtension(builder: builder) }.joined(separator: " ") + " "
+        return result
+    }
+}
+
 // Mark: Select
 
 /// The SQL SELECT statement.
-public struct Select: Query {
+public struct Select: Query, Extendable {
+    
+    //position + key
+    public private (set) var extensions: [Select.Position : [AnyExtension]] = [:]
+    
+    public enum Position {
+        case prefix
+        case suffix
+        case select
+        case from
+        case `where`
+    }
+    
+    public func extend(with: AnyExtension, at: Position) -> Select {
+        var new = self
+        if new.extensions[at] == nil {
+            new.extensions[at] = [with]
+        } else {
+            new.extensions[at]?.append(with)
+        }
+        return new
+    }
+    
     /// An array of `Field` elements to select.
     public let fields: [Field]?
     
@@ -61,7 +150,7 @@ public struct Select: Query {
     public private (set) var joins = [(join: Join, on: QueryFilterProtocol?, using: [Column]?)]()
     
     /// An array of `AuxiliaryTable` which will be used in a query with a WITH clause.
-    public private (set) var with: [AuxiliaryTable]?
+//    public private (set) var with: [AuxiliaryTable]?
 
     private var syntaxError = ""
 
@@ -116,61 +205,56 @@ public struct Select: Query {
         if syntaxError != "" {
             throw QueryError.syntaxError(syntaxError)
         }
-
-        var result = ""
         
-        if let with = with {
-            result += "WITH "
-                + "\(try with.map { try $0.buildWith(queryBuilder: queryBuilder) }.joined(separator: ", "))"
-                + " "
-        }
-        
-        result += "SELECT "
+        var select = ""
+        select += "SELECT "
         
         if distinct {
-            result += "DISTINCT "
+            select += "DISTINCT "
         }
         
         if let fields = fields, fields.count != 0 {
-            result += try "\(fields.map { try $0.build(queryBuilder: queryBuilder) }.joined(separator: ", "))"
+            select += try "\(fields.map { try $0.build(queryBuilder: queryBuilder) }.joined(separator: ", "))"
         }
         else {
-            result += "*"
+            select += "*"
         }
         
-        result += " FROM "
-        result += try "\(tables.map { try $0.build(queryBuilder: queryBuilder) }.joined(separator: ", "))"
+        var from = ""
+        from += " FROM "
+        from += try "\(tables.map { try $0.build(queryBuilder: queryBuilder) }.joined(separator: ", "))"
         
         for item in joins {
-            result += try item.join.build(queryBuilder: queryBuilder)
+            from += try item.join.build(queryBuilder: queryBuilder)
 
             if let on = item.on {
-                result += try " ON " + on.build(queryBuilder: queryBuilder)
+                from += try " ON " + on.build(queryBuilder: queryBuilder)
             }
             
             if let using = item.using {
-                result += " USING (" + using.map { $0.name }.joined(separator: ", ") + ")"
+                from += " USING (" + using.map { $0.name }.joined(separator: ", ") + ")"
             }
         }
         
+        var `where` = ""
         if let whereClause = whereClause {
-            result += try " WHERE " + whereClause.build(queryBuilder: queryBuilder)
+            `where` += try " WHERE " + whereClause.build(queryBuilder: queryBuilder)
         }
         
         if let groupClause = groupBy {
-            result += try " GROUP BY " + groupClause.map { try $0.build(queryBuilder: queryBuilder) }.joined(separator: ", ")
+            `where` += try " GROUP BY " + groupClause.map { try $0.build(queryBuilder: queryBuilder) }.joined(separator: ", ")
         }
         
         if let havingClause = havingClause {
-            result += try " HAVING " + havingClause.build(queryBuilder: queryBuilder)
+            `where` += try " HAVING " + havingClause.build(queryBuilder: queryBuilder)
         }
         
         if let orderClause = orderBy {
-            result += try " ORDER BY " + orderClause.map { try $0.build(queryBuilder: queryBuilder) }.joined(separator: ", ")
+            `where` += try " ORDER BY " + orderClause.map { try $0.build(queryBuilder: queryBuilder) }.joined(separator: ", ")
         }
         
         if let rowsToReturn = rowsToReturn {
-            result += " LIMIT \(rowsToReturn)"
+            `where` += " LIMIT \(rowsToReturn)"
         }
         
         if let offset = offset {
@@ -178,15 +262,22 @@ public struct Select: Query {
                 throw QueryError.syntaxError("Offset requires a limit to be set. ")
             }
             
-            result += " OFFSET \(offset)"
+            `where` += " OFFSET \(offset)"
         }
         
         if let unions = unions, unions.count != 0 {
             for union in unions {
-                result += try union.build(queryBuilder: queryBuilder)
+                `where` += try union.build(queryBuilder: queryBuilder)
             }
         }
+        
+        let prefix = try self.buildExtension(at: .prefix, using: queryBuilder)
+        let suffix = try self.buildExtension(at: .suffix, using: queryBuilder)
+        let selectExtension = try self.buildExtension(at: .select, using: queryBuilder)
+        let fromExtension = try self.buildExtension(at: .from, using: queryBuilder)
+        let whereExtension = try self.buildExtension(at: .where, using: queryBuilder)
 
+        var result = prefix + select + selectExtension + from + fromExtension + `where` + whereExtension + suffix
         result = updateParameterNumbers(query: result, queryBuilder: queryBuilder)
         return result
     }
@@ -479,12 +570,13 @@ public struct Select: Query {
     /// - Returns: A new instance of Select with tables for WITH clause.
     func with(_ tables: [AuxiliaryTable]) -> Select {
         var new = self
-        if new.with != nil {
+        if let extensions = new.extensions[.prefix],
+            (extensions.filter { $0.check(for: WithExtension.self) }).count > 0 {
             new.syntaxError += "Multiple with clauses. "
+            return new
+        } else {
+            let `extension` = AnyExtension(base: WithExtension(tables: tables))
+            return new.extend(with: `extension`, at: .prefix)
         }
-        else {
-            new.with = tables
-        }
-        return new
     }
 }

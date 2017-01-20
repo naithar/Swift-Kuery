@@ -188,7 +188,7 @@ class TestSelect: XCTestCase {
         
         var s = with(withTable, Select(withTable.d, t.a, from: t).join(withTable).on(t.b == withTable.f))
         let kuery = connection.descriptionOf(query: s)
-        let query = "WITH aux_table AS (SELECT tableSelect2.c AS d, tableSelect2.b AS f FROM tableSelect2) SELECT aux_table.d, tableSelect.a FROM tableSelect JOIN aux_table ON tableSelect.b = aux_table.f"
+        let query = " WITH aux_table AS (SELECT tableSelect2.c AS d, tableSelect2.b AS f FROM tableSelect2) SELECT aux_table.d, tableSelect.a FROM tableSelect JOIN aux_table ON tableSelect.b = aux_table.f"
         XCTAssertEqual(kuery, query, "\nError in query construction: \n\(kuery) \ninstead of \n\(query)")
         
         withTable = AuxTable()
