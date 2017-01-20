@@ -38,7 +38,7 @@ public struct AnyExtension: Extension {
         return try (self.base as! Extension).buildExtension(builder: builder)
     }
     
-    func check<T>(for type: T.Type) -> Bool {
+    public func check<T: Extension>(for type: T.Type) -> Bool {
         return self.base is T
     }
 }
